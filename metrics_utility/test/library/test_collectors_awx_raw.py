@@ -2,11 +2,33 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
+import pytest
 
-from metrics_utility.library.collectors.awx.config import config
-from metrics_utility.library.collectors.awx.events_table import events_table
-from metrics_utility.library.collectors.awx.host_metric_table import host_metric_table
-from metrics_utility.library.collectors.awx.unified_jobs_table import unified_jobs_table
+from metrics_utility.library.collectors.awx.config import (
+    _as_datetime,
+    _decode,
+    _get_install_type,
+    _get_settings,
+    config,
+)
+from metrics_utility.library.collectors.awx.events_table import (
+    _window as events_window,
+)
+from metrics_utility.library.collectors.awx.events_table import (
+    events_table,
+)
+from metrics_utility.library.collectors.awx.host_metric_table import (
+    _window as host_metric_window,
+)
+from metrics_utility.library.collectors.awx.host_metric_table import (
+    host_metric_table,
+)
+from metrics_utility.library.collectors.awx.unified_jobs_table import (
+    _window as unified_jobs_window,
+)
+from metrics_utility.library.collectors.awx.unified_jobs_table import (
+    unified_jobs_table,
+)
 
 
 SINCE = datetime(2024, 1, 1, tzinfo=UTC)
@@ -48,6 +70,88 @@ def test_config_handles_non_mapping_license():
     result = config(db=db).gather()
 
     assert result['license_type'] == 'UNLICENSED'
+
+
+@pytest.mark.parametrize(
+    ('environment', 'expected'),
+    [
+        ({'container': 'oci'}, 'openshift'),
+        ({'KUBERNETES_SERVICE_PORT': '443'}, 'k8s'),
+        ({}, 'traditional'),
+    ],
+)
+def test_get_install_type(environment, expected, monkeypatch):
+    monkeypatch.delenv('container', raising=False)
+    monkeypatch.delenv('KUBERNETES_SERVICE_PORT', raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+
+    assert _get_install_type() == expected
+
+
+def test_get_settings_none():
+    assert _get_settings(None) == {}
+
+
+def test_get_settings_skips_falsey_values():
+    db = _mock_db()
+    cursor = db.cursor.return_value.__enter__.return_value
+    cursor.fetchall.return_value = [
+        ('INSTALL_UUID', ''),
+        ('SYSTEM_UUID', None),
+        ('LICENSE', 0),
+        ('TOWER_URL', False),
+    ]
+
+    assert _get_settings(db) == {}
+
+
+@pytest.mark.parametrize('value', [None, 1, {}, []])
+def test_decode_returns_non_string_values(value):
+    assert _decode(value) is value
+
+
+def test_decode_returns_malformed_json_unchanged():
+    value = '{malformed json'
+
+    assert _decode(value) == value
+
+
+def test_as_datetime_parses_valid_value():
+    value = '2024-01-01T00:00:00+00:00'
+
+    assert _as_datetime(value) == datetime(2024, 1, 1, tzinfo=UTC)
+
+
+def test_as_datetime_returns_invalid_value_unchanged():
+    value = 'not a datetime'
+
+    assert _as_datetime(value) == value
+
+
+@pytest.mark.parametrize('value', [None, 1, {}, []])
+def test_as_datetime_returns_non_string_values(value):
+    assert _as_datetime(value) is value
+
+
+@pytest.mark.parametrize(
+    'window',
+    [events_window, unified_jobs_window, host_metric_window],
+)
+@pytest.mark.parametrize(
+    ('since', 'until', 'error'),
+    [
+        ('not a datetime', UNTIL, TypeError),
+        (SINCE, 'not a datetime', TypeError),
+        (datetime(2024, 1, 1), UNTIL, ValueError),
+        (SINCE, datetime(2024, 2, 1), ValueError),
+        (None, UNTIL, ValueError),
+        (SINCE, None, ValueError),
+    ],
+)
+def test_awx_windows_validate_bounds(window, since, until, error):
+    with pytest.raises(error):
+        window(since, until)
 
 
 @patch('metrics_utility.library.collectors.util._copy_table_pandas')
