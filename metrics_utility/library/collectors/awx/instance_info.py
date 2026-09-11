@@ -79,6 +79,6 @@ def _get_control_task_impact(db):
         if row and row[0]:
             try:
                 return int(json.loads(row[0]))
-            except (json.JSONDecodeError, TypeError, ValueError):
+            except (TypeError, ValueError):
                 pass
     return 1

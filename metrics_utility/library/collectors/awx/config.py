@@ -126,7 +126,7 @@ def _decode(value):
         return value
     try:
         return json.loads(value, object_hook=_datetime_hook)
-    except (TypeError, ValueError, json.JSONDecodeError):
+    except (TypeError, ValueError):
         return value
 
 
